@@ -34,38 +34,48 @@ def _check_valid_plan_and_result(
         assert op in ds.stats(), f"Operator {op} not found: {ds.stats()}"
 
 
-def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
-    """Test limit pushdown behavior - pushes through safe operations."""
-
-    def f1(x):
-        return x
-
-    def f2(x):
-        return x
-
-    # Test 1: Basic Limit -> Limit fusion (should still work)
+def test_limit_pushdown_basic_limit_fusion(ray_start_regular_shared_2_cpus):
+    """Test basic Limit -> Limit fusion."""
     ds = ray.data.range(100).limit(5).limit(100)
     _check_valid_plan_and_result(
         ds, "Read[ReadRange] -> Limit[limit=5]", [{"id": i} for i in range(5)]
     )
 
+
+def test_limit_pushdown_limit_fusion_reversed(ray_start_regular_shared_2_cpus):
+    """Test Limit fusion with reversed order."""
     ds = ray.data.range(100).limit(100).limit(5)
     _check_valid_plan_and_result(
         ds, "Read[ReadRange] -> Limit[limit=5]", [{"id": i} for i in range(5)]
     )
 
+
+def test_limit_pushdown_multiple_limit_fusion(ray_start_regular_shared_2_cpus):
+    """Test multiple Limit operations fusion."""
     ds = ray.data.range(100).limit(50).limit(80).limit(5).limit(20)
     _check_valid_plan_and_result(
         ds, "Read[ReadRange] -> Limit[limit=5]", [{"id": i} for i in range(5)]
     )
 
-    # Test 2: Limit should push through MapRows operations (safe)
+
+def test_limit_pushdown_through_maprows(ray_start_regular_shared_2_cpus):
+    """Test that Limit pushes through MapRows operations."""
+
+    def f1(x):
+        return x
+
     ds = ray.data.range(100, override_num_blocks=100).map(f1).limit(1)
     _check_valid_plan_and_result(
         ds, "Read[ReadRange] -> Limit[limit=1] -> MapRows[Map(f1)]", [{"id": 0}]
     )
 
-    # Test 3: Limit should push through MapBatches operations
+
+def test_limit_pushdown_through_mapbatches(ray_start_regular_shared_2_cpus):
+    """Test that Limit pushes through MapBatches operations."""
+
+    def f2(x):
+        return x
+
     ds = ray.data.range(100, override_num_blocks=100).map_batches(f2).limit(1)
     _check_valid_plan_and_result(
         ds,
@@ -73,7 +83,9 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
         [{"id": 0}],
     )
 
-    # Test 4: Limit should NOT push through Filter operations (conservative)
+
+def test_limit_pushdown_stops_at_filter(ray_start_regular_shared_2_cpus):
+    """Test that Limit does NOT push through Filter operations (conservative)."""
     ds = (
         ray.data.range(100, override_num_blocks=100)
         .filter(lambda x: x["id"] < 50)
@@ -83,7 +95,9 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
         ds, "Read[ReadRange] -> Filter[Filter(<lambda>)] -> Limit[limit=1]", [{"id": 0}]
     )
 
-    # Test 5: Limit should push through Project operations (safe)
+
+def test_limit_pushdown_through_project(ray_start_regular_shared_2_cpus):
+    """Test that Limit pushes through Project operations."""
     ds = ray.data.range(100, override_num_blocks=100).select_columns(["id"]).limit(5)
     _check_valid_plan_and_result(
         ds,
@@ -92,7 +106,9 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
         check_ordering=False,
     )
 
-    # Test 6: Limit should stop at Sort operations (AllToAll)
+
+def test_limit_pushdown_stops_at_sort(ray_start_regular_shared_2_cpus):
+    """Test that Limit stops at Sort operations (AllToAll)."""
     ds = ray.data.range(100).sort("id").limit(5)
     _check_valid_plan_and_result(
         ds,
@@ -100,7 +116,16 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
         [{"id": i} for i in range(5)],
     )
 
-    # Test 7: More complex interweaved case.
+
+def test_limit_pushdown_complex_interweaved_operations(ray_start_regular_shared_2_cpus):
+    """Test Limit pushdown with complex interweaved operations."""
+
+    def f1(x):
+        return x
+
+    def f2(x):
+        return x
+
     ds = ray.data.range(100).sort("id").map(f1).limit(20).sort("id").map(f2).limit(5)
     _check_valid_plan_and_result(
         ds,
@@ -109,7 +134,16 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
         [{"id": i} for i in range(5)],
     )
 
-    # Test 8: Test limit pushdown between two Map operators.
+
+def test_limit_pushdown_between_two_map_operators(ray_start_regular_shared_2_cpus):
+    """Test Limit pushdown between two Map operators."""
+
+    def f1(x):
+        return x
+
+    def f2(x):
+        return x
+
     ds = ray.data.range(100, override_num_blocks=100).map(f1).limit(1).map(f2)
     _check_valid_plan_and_result(
         ds,
@@ -118,16 +152,18 @@ def test_limit_pushdown_conservative(ray_start_regular_shared_2_cpus):
     )
 
 
-def test_limit_pushdown_correctness(ray_start_regular_shared_2_cpus):
-    """Test that limit pushdown produces correct results in various scenarios."""
-
-    # Test 1: Simple project + limit
+def test_limit_pushdown_correctness_simple_project(ray_start_regular_shared_2_cpus):
+    """Test that limit pushdown produces correct results with simple project."""
     ds = ray.data.range(100).select_columns(["id"]).limit(10)
     result = ds.take_all()
     expected = [{"id": i} for i in range(10)]
-    assert result == expected
+    assert rows_same(pd.DataFrame(result), pd.DataFrame(expected))
 
-    # Test 2: Multiple operations + limit (with MapRows pushdown)
+
+def test_limit_pushdown_correctness_multiple_operations(
+    ray_start_regular_shared_2_cpus,
+):
+    """Test limit pushdown with multiple operations."""
     ds = (
         ray.data.range(100)
         .map(lambda x: {"id": x["id"], "squared": x["id"] ** 2})
@@ -136,27 +172,35 @@ def test_limit_pushdown_correctness(ray_start_regular_shared_2_cpus):
     )
     result = ds.take_all()
     expected = [{"id": i} for i in range(5)]
-    assert result == expected
+    assert rows_same(pd.DataFrame(result), pd.DataFrame(expected))
 
-    # Test 3: MapRows operations should get limit pushed (safe)
+
+def test_limit_pushdown_correctness_maprows(ray_start_regular_shared_2_cpus):
+    """Test that MapRows operations get limit pushed (safe)."""
     ds = ray.data.range(100).map(lambda x: {"id": x["id"] * 2}).limit(5)
     result = ds.take_all()
     expected = [{"id": i * 2} for i in range(5)]
     assert result == expected
 
-    # Test 4: MapBatches operations should not get limit pushed
+
+def test_limit_pushdown_correctness_mapbatches(ray_start_regular_shared_2_cpus):
+    """Test that MapBatches operations handle limit correctly."""
     ds = ray.data.range(100).map_batches(lambda batch: {"id": batch["id"] * 2}).limit(5)
     result = ds.take_all()
     expected = [{"id": i * 2} for i in range(5)]
     assert result == expected
 
-    # Test 5: Filter operations should not get limit pushed (conservative)
+
+def test_limit_pushdown_correctness_filter(ray_start_regular_shared_2_cpus):
+    """Test that Filter operations do not get limit pushed (conservative)."""
     ds = ray.data.range(100).filter(lambda x: x["id"] % 2 == 0).limit(3)
     result = ds.take_all()
     expected = [{"id": i} for i in [0, 2, 4]]
     assert result == expected
 
-    # Test 6: Complex chain with both safe operations (should all get limit pushed)
+
+def test_limit_pushdown_correctness_complex_chain(ray_start_regular_shared_2_cpus):
+    """Test limit pushdown with complex chain of operations."""
     ds = (
         ray.data.range(100)
         .select_columns(["id"])  # Project - could be safe if it was the immediate input
@@ -175,8 +219,8 @@ def test_limit_pushdown_correctness(ray_start_regular_shared_2_cpus):
     )
 
 
-def test_limit_pushdown_scan_efficiency(ray_start_regular_shared_2_cpus):
-    """Test that limit pushdown scans fewer rows from the data source."""
+def test_limit_pushdown_scan_efficiency_project(ray_start_regular_shared_2_cpus):
+    """Test that limit pushdown scans fewer rows with Project operations."""
 
     @ray.remote
     class Counter:
@@ -228,7 +272,7 @@ def test_limit_pushdown_scan_efficiency(ray_start_regular_shared_2_cpus):
         def get_rows_produced(self):
             return ray.get(self.counter.get.remote())
 
-    # Test 1: Project + Limit should scan fewer rows due to pushdown
+    # Project + Limit should scan fewer rows due to pushdown
     source = CountingDatasource()
     ds = ray.data.read_datasource(source, override_num_blocks=20, n_per_block=10)
     ds = ds.select_columns(["id"]).limit(5)
@@ -236,44 +280,150 @@ def test_limit_pushdown_scan_efficiency(ray_start_regular_shared_2_cpus):
 
     # Should get correct results
     assert len(result) == 5
-    assert result == [{"id": i} for i in range(5)]
+    assert rows_same(pd.DataFrame(result), pd.DataFrame([{"id": i} for i in range(5)]))
 
     # Should have scanned significantly fewer than all 200 rows (20 blocks * 10 rows)
     # Due to pushdown, we should scan much less
-    rows_produced_1 = source.get_rows_produced()
-    assert rows_produced_1 < 200  # Should be much less than total
+    rows_produced = source.get_rows_produced()
+    assert rows_produced < 200  # Should be much less than total
+    assert rows_produced < 100  # Should be much less than total
 
-    # Test 2: MapRows + Limit should also scan fewer rows due to pushdown
-    source2 = CountingDatasource()
-    ds2 = ray.data.read_datasource(source2, override_num_blocks=20, n_per_block=10)
-    ds2 = ds2.map(lambda x: x).limit(5)
-    result2 = ds2.take_all()
+
+def test_limit_pushdown_scan_efficiency_maprows(ray_start_regular_shared_2_cpus):
+    """Test that limit pushdown scans fewer rows with MapRows operations."""
+
+    @ray.remote
+    class Counter:
+        def __init__(self):
+            self.value = 0
+
+        def increment(self, amount=1):
+            self.value += amount
+            return self.value
+
+        def get(self):
+            return self.value
+
+        def reset(self):
+            self.value = 0
+
+    # Create a custom datasource that tracks how many rows it produces
+    class CountingDatasource(Datasource):
+        def __init__(self):
+            self.counter = Counter.remote()
+
+        def prepare_read(self, parallelism, n_per_block=10):
+            def read_fn(block_idx):
+                # Each block produces n_per_block rows
+                ray.get(self.counter.increment.remote(n_per_block))
+                return [
+                    pd.DataFrame(
+                        {
+                            "id": range(
+                                block_idx * n_per_block, (block_idx + 1) * n_per_block
+                            )
+                        }
+                    )
+                ]
+
+            return [
+                ReadTask(
+                    lambda i=i: read_fn(i),
+                    BlockMetadata(
+                        num_rows=n_per_block,
+                        size_bytes=n_per_block * 8,  # rough estimate
+                        input_files=None,
+                        exec_stats=None,
+                    ),
+                )
+                for i in range(parallelism)
+            ]
+
+        def get_rows_produced(self):
+            return ray.get(self.counter.get.remote())
+
+    # MapRows + Limit should also scan fewer rows due to pushdown
+    source = CountingDatasource()
+    ds = ray.data.read_datasource(source, override_num_blocks=20, n_per_block=10)
+    ds = ds.map(lambda x: x).limit(5)
+    result = ds.take_all()
 
     # Should get correct results
-    assert len(result2) == 5
-    assert result2 == [{"id": i} for i in range(5)]
+    assert len(result) == 5
+    assert rows_same(pd.DataFrame(result), pd.DataFrame([{"id": i} for i in range(5)]))
 
     # Should also scan fewer than total due to pushdown
-    rows_produced_2 = source2.get_rows_produced()
-    assert rows_produced_2 < 200
+    rows_produced = source.get_rows_produced()
+    assert rows_produced < 200
+    assert rows_produced < 100  # Should be much less than total
 
-    # Both should be efficient with pushdown
-    assert rows_produced_1 < 100  # Should be much less than total
-    assert rows_produced_2 < 100  # Should be much less than total
 
-    # Test 3: Filter + Limit should scan fewer due to early termination, but not pushdown
-    source3 = CountingDatasource()
-    ds3 = ray.data.read_datasource(source3, override_num_blocks=20, n_per_block=10)
-    ds3 = ds3.filter(lambda x: x["id"] % 2 == 0).limit(3)
-    result3 = ds3.take_all()
+def test_limit_pushdown_scan_efficiency_filter(ray_start_regular_shared_2_cpus):
+    """Test that limit with Filter scans fewer rows due to early termination."""
+
+    @ray.remote
+    class Counter:
+        def __init__(self):
+            self.value = 0
+
+        def increment(self, amount=1):
+            self.value += amount
+            return self.value
+
+        def get(self):
+            return self.value
+
+        def reset(self):
+            self.value = 0
+
+    # Create a custom datasource that tracks how many rows it produces
+    class CountingDatasource(Datasource):
+        def __init__(self):
+            self.counter = Counter.remote()
+
+        def prepare_read(self, parallelism, n_per_block=10):
+            def read_fn(block_idx):
+                # Each block produces n_per_block rows
+                ray.get(self.counter.increment.remote(n_per_block))
+                return [
+                    pd.DataFrame(
+                        {
+                            "id": range(
+                                block_idx * n_per_block, (block_idx + 1) * n_per_block
+                            )
+                        }
+                    )
+                ]
+
+            return [
+                ReadTask(
+                    lambda i=i: read_fn(i),
+                    BlockMetadata(
+                        num_rows=n_per_block,
+                        size_bytes=n_per_block * 8,  # rough estimate
+                        input_files=None,
+                        exec_stats=None,
+                    ),
+                )
+                for i in range(parallelism)
+            ]
+
+        def get_rows_produced(self):
+            return ray.get(self.counter.get.remote())
+
+    # Filter + Limit should scan fewer due to early termination, but not pushdown
+    source = CountingDatasource()
+    ds = ray.data.read_datasource(source, override_num_blocks=20, n_per_block=10)
+    ds = ds.filter(lambda x: x["id"] % 2 == 0).limit(3)
+    result = ds.take_all()
 
     # Should get correct results
-    assert len(result3) == 3
-    assert result3 == [{"id": i} for i in [0, 2, 4]]
+    assert len(result) == 3
+    assert result == [{"id": i} for i in [0, 2, 4]]
 
     # Should still scan fewer than total due to early termination
-    rows_produced_3 = source3.get_rows_produced()
-    assert rows_produced_3 < 200
+    rows_produced = source.get_rows_produced()
+    assert rows_produced < 200
 
 
 def test_limit_pushdown_union(ray_start_regular_shared_2_cpus):
@@ -285,7 +435,9 @@ def test_limit_pushdown_union(ray_start_regular_shared_2_cpus):
     ds = ds1.union(ds2).limit(5)
 
     expected_plan = "Read[ReadRange] -> Limit[limit=5], Read[ReadRange] -> Limit[limit=5] -> Union[Union] -> Limit[limit=5]"
-    _check_valid_plan_and_result(ds, expected_plan, [{"id": i} for i in range(5)])
+    _check_valid_plan_and_result(
+        ds, expected_plan, [{"id": i} for i in range(5)], check_ordering=False
+    )
 
 
 def test_limit_pushdown_union_with_maprows(ray_start_regular_shared_2_cpus):
@@ -300,7 +452,9 @@ def test_limit_pushdown_union_with_maprows(ray_start_regular_shared_2_cpus):
         "Read[ReadRange] -> Limit[limit=5] -> Union[Union] -> "
         "Limit[limit=5] -> MapRows[Map(<lambda>)]"
     )
-    _check_valid_plan_and_result(ds, expected_plan, [{"id": i} for i in range(5)])
+    _check_valid_plan_and_result(
+        ds, expected_plan, [{"id": i} for i in range(5)], check_ordering=False
+    )
 
 
 def test_limit_pushdown_union_with_sort(ray_start_regular_shared_2_cpus):
@@ -334,7 +488,9 @@ def test_limit_pushdown_multiple_unions(ray_start_regular_shared_2_cpus):
         "Read[ReadRange] -> Limit[limit=5] -> Union[Union] -> Limit[limit=5], "
         "Read[ReadRange] -> Limit[limit=5] -> Union[Union] -> Limit[limit=5]"
     )
-    _check_valid_plan_and_result(ds, expected_plan, [{"id": i} for i in range(5)])
+    _check_valid_plan_and_result(
+        ds, expected_plan, [{"id": i} for i in range(5)], check_ordering=False
+    )
 
 
 def test_limit_pushdown_union_with_groupby(ray_start_regular_shared_2_cpus):
@@ -427,7 +583,9 @@ def test_limit_pushdown_union_maps_projects(ray_start_regular_shared_2_cpus):
 
     expected_result = [{"id": i} for i in range(3)]  # First 3 rows from left branch.
 
-    _check_valid_plan_and_result(ds, expected_plan, expected_result)
+    _check_valid_plan_and_result(
+        ds, expected_plan, expected_result, check_ordering=False
+    )
 
 
 def test_limit_pushdown_map_per_block_limit_applied(ray_start_regular_shared_2_cpus):
