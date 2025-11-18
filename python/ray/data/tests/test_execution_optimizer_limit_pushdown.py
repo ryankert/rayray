@@ -15,6 +15,63 @@ from ray.data.tests.conftest import *  # noqa
 from ray.tests.conftest import *  # noqa
 
 
+# Helper classes for scan efficiency tests
+@ray.remote
+class Counter:
+    """Counter for tracking rows produced during datasource reads."""
+
+    def __init__(self):
+        self.value = 0
+
+    def increment(self, amount=1):
+        self.value += amount
+        return self.value
+
+    def get(self):
+        return self.value
+
+    def reset(self):
+        self.value = 0
+
+
+class CountingDatasource(Datasource):
+    """Custom datasource that tracks how many rows it produces."""
+
+    def __init__(self):
+        super().__init__()
+        self.counter = Counter.remote()
+
+    def prepare_read(self, parallelism, n_per_block=10):
+        def read_fn(block_idx):
+            # Each block produces n_per_block rows
+            ray.get(self.counter.increment.remote(n_per_block))
+            return [
+                pd.DataFrame(
+                    {
+                        "id": range(
+                            block_idx * n_per_block, (block_idx + 1) * n_per_block
+                        )
+                    }
+                )
+            ]
+
+        return [
+            ReadTask(
+                lambda i=i: read_fn(i),
+                BlockMetadata(
+                    num_rows=n_per_block,
+                    size_bytes=n_per_block * 8,  # rough estimate
+                    input_files=None,
+                    exec_stats=None,
+                ),
+            )
+            for i in range(parallelism)
+        ]
+
+    def get_rows_produced(self):
+        return ray.get(self.counter.get.remote())
+
+
 def _check_valid_plan_and_result(
     ds: Dataset,
     expected_plan: Plan,
@@ -222,56 +279,6 @@ def test_limit_pushdown_correctness_complex_chain(ray_start_regular_shared_2_cpu
 def test_limit_pushdown_scan_efficiency_project(ray_start_regular_shared_2_cpus):
     """Test that limit pushdown scans fewer rows with Project operations."""
 
-    @ray.remote
-    class Counter:
-        def __init__(self):
-            self.value = 0
-
-        def increment(self, amount=1):
-            self.value += amount
-            return self.value
-
-        def get(self):
-            return self.value
-
-        def reset(self):
-            self.value = 0
-
-    # Create a custom datasource that tracks how many rows it produces
-    class CountingDatasource(Datasource):
-        def __init__(self):
-            self.counter = Counter.remote()
-
-        def prepare_read(self, parallelism, n_per_block=10):
-            def read_fn(block_idx):
-                # Each block produces n_per_block rows
-                ray.get(self.counter.increment.remote(n_per_block))
-                return [
-                    pd.DataFrame(
-                        {
-                            "id": range(
-                                block_idx * n_per_block, (block_idx + 1) * n_per_block
-                            )
-                        }
-                    )
-                ]
-
-            return [
-                ReadTask(
-                    lambda i=i: read_fn(i),
-                    BlockMetadata(
-                        num_rows=n_per_block,
-                        size_bytes=n_per_block * 8,  # rough estimate
-                        input_files=None,
-                        exec_stats=None,
-                    ),
-                )
-                for i in range(parallelism)
-            ]
-
-        def get_rows_produced(self):
-            return ray.get(self.counter.get.remote())
-
     # Project + Limit should scan fewer rows due to pushdown
     source = CountingDatasource()
     ds = ray.data.read_datasource(source, override_num_blocks=20, n_per_block=10)
@@ -292,56 +299,6 @@ def test_limit_pushdown_scan_efficiency_project(ray_start_regular_shared_2_cpus)
 def test_limit_pushdown_scan_efficiency_maprows(ray_start_regular_shared_2_cpus):
     """Test that limit pushdown scans fewer rows with MapRows operations."""
 
-    @ray.remote
-    class Counter:
-        def __init__(self):
-            self.value = 0
-
-        def increment(self, amount=1):
-            self.value += amount
-            return self.value
-
-        def get(self):
-            return self.value
-
-        def reset(self):
-            self.value = 0
-
-    # Create a custom datasource that tracks how many rows it produces
-    class CountingDatasource(Datasource):
-        def __init__(self):
-            self.counter = Counter.remote()
-
-        def prepare_read(self, parallelism, n_per_block=10):
-            def read_fn(block_idx):
-                # Each block produces n_per_block rows
-                ray.get(self.counter.increment.remote(n_per_block))
-                return [
-                    pd.DataFrame(
-                        {
-                            "id": range(
-                                block_idx * n_per_block, (block_idx + 1) * n_per_block
-                            )
-                        }
-                    )
-                ]
-
-            return [
-                ReadTask(
-                    lambda i=i: read_fn(i),
-                    BlockMetadata(
-                        num_rows=n_per_block,
-                        size_bytes=n_per_block * 8,  # rough estimate
-                        input_files=None,
-                        exec_stats=None,
-                    ),
-                )
-                for i in range(parallelism)
-            ]
-
-        def get_rows_produced(self):
-            return ray.get(self.counter.get.remote())
-
     # MapRows + Limit should also scan fewer rows due to pushdown
     source = CountingDatasource()
     ds = ray.data.read_datasource(source, override_num_blocks=20, n_per_block=10)
@@ -360,56 +317,6 @@ def test_limit_pushdown_scan_efficiency_maprows(ray_start_regular_shared_2_cpus)
 
 def test_limit_pushdown_scan_efficiency_filter(ray_start_regular_shared_2_cpus):
     """Test that limit with Filter scans fewer rows due to early termination."""
-
-    @ray.remote
-    class Counter:
-        def __init__(self):
-            self.value = 0
-
-        def increment(self, amount=1):
-            self.value += amount
-            return self.value
-
-        def get(self):
-            return self.value
-
-        def reset(self):
-            self.value = 0
-
-    # Create a custom datasource that tracks how many rows it produces
-    class CountingDatasource(Datasource):
-        def __init__(self):
-            self.counter = Counter.remote()
-
-        def prepare_read(self, parallelism, n_per_block=10):
-            def read_fn(block_idx):
-                # Each block produces n_per_block rows
-                ray.get(self.counter.increment.remote(n_per_block))
-                return [
-                    pd.DataFrame(
-                        {
-                            "id": range(
-                                block_idx * n_per_block, (block_idx + 1) * n_per_block
-                            )
-                        }
-                    )
-                ]
-
-            return [
-                ReadTask(
-                    lambda i=i: read_fn(i),
-                    BlockMetadata(
-                        num_rows=n_per_block,
-                        size_bytes=n_per_block * 8,  # rough estimate
-                        input_files=None,
-                        exec_stats=None,
-                    ),
-                )
-                for i in range(parallelism)
-            ]
-
-        def get_rows_produced(self):
-            return ray.get(self.counter.get.remote())
 
     # Filter + Limit should scan fewer due to early termination, but not pushdown
     source = CountingDatasource()
@@ -592,18 +499,6 @@ def test_limit_pushdown_map_per_block_limit_applied(ray_start_regular_shared_2_c
     """Test that per-block limits are actually applied during map execution."""
 
     # Create a global counter using Ray
-    @ray.remote
-    class Counter:
-        def __init__(self):
-            self.value = 0
-
-        def increment(self):
-            self.value += 1
-            return self.value
-
-        def get(self):
-            return self.value
-
     counter = Counter.remote()
 
     def track_processing(row):
