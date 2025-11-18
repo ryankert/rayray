@@ -144,7 +144,7 @@ class _DatetimeNamespace:
         Returns:
             UDFExpr that parses strings as datetime values.
         """
-        return _create_dt_udf(pc.strptime, DataType.timestamp(unit))(
+        return _create_dt_udf(pc.strptime, DataType.temporal("timestamp", unit=unit))(
             self._expr, format=format, unit=unit
         )
 
@@ -158,9 +158,9 @@ class _DatetimeNamespace:
         Returns:
             UDFExpr that adds timezone information.
         """
-        return _create_dt_udf(pc.assume_timezone, DataType.timestamp("us", timezone))(
-            self._expr, timezone=timezone
-        )
+        return _create_dt_udf(
+            pc.assume_timezone, DataType.temporal("timestamp", unit="us", tz=timezone)
+        )(self._expr, timezone=timezone)
 
     # Rounding methods
     def ceil(self, unit: str = "day") -> "UDFExpr":
@@ -172,9 +172,9 @@ class _DatetimeNamespace:
         Returns:
             UDFExpr that rounds datetime values up.
         """
-        return _create_dt_udf(pc.ceil_temporal, DataType.timestamp("us"))(
-            self._expr, unit=unit
-        )
+        return _create_dt_udf(
+            pc.ceil_temporal, DataType.temporal("timestamp", unit="us")
+        )(self._expr, unit=unit)
 
     def floor(self, unit: str = "day") -> "UDFExpr":
         """Round datetime values down to the nearest unit.
@@ -185,9 +185,9 @@ class _DatetimeNamespace:
         Returns:
             UDFExpr that rounds datetime values down.
         """
-        return _create_dt_udf(pc.floor_temporal, DataType.timestamp("us"))(
-            self._expr, unit=unit
-        )
+        return _create_dt_udf(
+            pc.floor_temporal, DataType.temporal("timestamp", unit="us")
+        )(self._expr, unit=unit)
 
     def round(self, unit: str = "day") -> "UDFExpr":
         """Round datetime values to the nearest unit.
@@ -198,6 +198,6 @@ class _DatetimeNamespace:
         Returns:
             UDFExpr that rounds datetime values.
         """
-        return _create_dt_udf(pc.round_temporal, DataType.timestamp("us"))(
-            self._expr, unit=unit
-        )
+        return _create_dt_udf(
+            pc.round_temporal, DataType.temporal("timestamp", unit="us")
+        )(self._expr, unit=unit)
