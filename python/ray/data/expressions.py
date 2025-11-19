@@ -23,7 +23,10 @@ from ray.data.datatype import DataType
 from ray.util.annotations import DeveloperAPI, PublicAPI
 
 if TYPE_CHECKING:
+    from ray.data.namespace_expressions.array_namespace import _ArrayNamespace
+    from ray.data.namespace_expressions.datetime_namespace import _DatetimeNamespace
     from ray.data.namespace_expressions.list_namespace import _ListNamespace
+    from ray.data.namespace_expressions.map_namespace import _MapNamespace
     from ray.data.namespace_expressions.string_namespace import _StringNamespace
     from ray.data.namespace_expressions.struct_namespace import _StructNamespace
 
@@ -485,6 +488,405 @@ class Expr(ABC):
         from ray.data.namespace_expressions.struct_namespace import _StructNamespace
 
         return _StructNamespace(self)
+
+    @property
+    def dt(self) -> "_DatetimeNamespace":
+        """Access datetime operations for this expression.
+
+        Returns:
+            A _DatetimeNamespace that provides datetime-specific operations.
+
+        Example:
+            >>> from ray.data.expressions import col
+            >>> import ray
+            >>> import pyarrow as pa
+            >>> ds = ray.data.from_arrow(pa.table({
+            ...     "timestamp": pa.array([
+            ...         pa.scalar("2021-01-01 12:00:00", type=pa.timestamp("us")),
+            ...         pa.scalar("2021-06-15 08:30:00", type=pa.timestamp("us"))
+            ...     ])
+            ... }))
+            >>> ds = ds.with_column("year", col("timestamp").dt.year())  # doctest: +SKIP
+            >>> ds = ds.with_column("formatted", col("timestamp").dt.strftime("%Y-%m-%d"))  # doctest: +SKIP
+        """
+        from ray.data.namespace_expressions.datetime_namespace import (
+            _DatetimeNamespace,
+        )
+
+        return _DatetimeNamespace(self)
+
+    @property
+    def map(self) -> "_MapNamespace":
+        """Access map operations for this expression.
+
+        Returns:
+            A _MapNamespace that provides map-specific operations.
+
+        Example:
+            >>> from ray.data.expressions import col
+            >>> import ray
+            >>> import pyarrow as pa
+            >>> ds = ray.data.from_arrow(pa.table({
+            ...     "data": pa.array([
+            ...         [("a", 1), ("b", 2)],
+            ...         [("x", 10), ("y", 20)]
+            ...     ], type=pa.map_(pa.string(), pa.int32()))
+            ... }))
+            >>> ds = ds.with_column("keys", col("data").map.keys())  # doctest: +SKIP
+            >>> ds = ds.with_column("values", col("data").map.values())  # doctest: +SKIP
+        """
+        from ray.data.namespace_expressions.map_namespace import _MapNamespace
+
+        return _MapNamespace(self)
+
+    @property
+    def arr(self) -> "_ArrayNamespace":
+        """Access fixed-size array operations for this expression.
+
+        Returns:
+            A _ArrayNamespace that provides fixed-size array-specific operations.
+
+        Example:
+            >>> from ray.data.expressions import col
+            >>> import ray
+            >>> import pyarrow as pa
+            >>> ds = ray.data.from_arrow(pa.table({
+            ...     "embeddings": pa.array([
+            ...         [1.0, 2.0, 3.0],
+            ...         [4.0, 5.0, 6.0]
+            ...     ], type=pa.list_(pa.float64(), 3))
+            ... }))
+            >>> ds = ds.with_column("as_list", col("embeddings").arr.to_list())  # doctest: +SKIP
+        """
+        from ray.data.namespace_expressions.array_namespace import _ArrayNamespace
+
+        return _ArrayNamespace(self)
+
+    # Arithmetic methods
+    def negate(self) -> "Expr":
+        """Negate the expression (unary minus).
+
+        Returns:
+            UDFExpr that negates each value.
+
+        Example:
+            >>> from ray.data.expressions import col
+            >>> expr = col("value").negate()  # Same as -col("value")
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _negate(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.negate(arr)
+
+        return _negate(self)
+
+    def sign(self) -> "Expr":
+        """Compute the sign of each value (-1, 0, or 1).
+
+        Returns:
+            UDFExpr that returns the sign of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.int8())
+        def _sign(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.sign(arr)
+
+        return _sign(self)
+
+    def power(self, exponent: Union[int, float, "Expr"]) -> "Expr":
+        """Raise values to the given power.
+
+        Args:
+            exponent: The exponent to raise to
+
+        Returns:
+            UDFExpr that raises values to the given power.
+        """
+        if isinstance(exponent, Expr):
+            # Handle expression as exponent - would need binary operation
+            # For now, convert to literal if it's a simple value
+            raise NotImplementedError("Expression exponents not yet supported")
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _power(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.power(arr, exponent)
+
+        return _power(self)
+
+    def abs(self) -> "Expr":
+        """Compute the absolute value.
+
+        Returns:
+            UDFExpr that returns the absolute value of each element.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _abs(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.abs(arr)
+
+        return _abs(self)
+
+    # Rounding methods
+    def ceil(self) -> "Expr":
+        """Round values up to the nearest integer.
+
+        Returns:
+            UDFExpr that rounds values up.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _ceil(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.ceil(arr)
+
+        return _ceil(self)
+
+    def floor(self) -> "Expr":
+        """Round values down to the nearest integer.
+
+        Returns:
+            UDFExpr that rounds values down.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _floor(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.floor(arr)
+
+        return _floor(self)
+
+    def round(self, ndigits: int = 0) -> "Expr":
+        """Round values to the nearest integer or specified decimal places.
+
+        Args:
+            ndigits: Number of decimal places to round to (default: 0)
+
+        Returns:
+            UDFExpr that rounds values.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _round(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.round(arr, ndigits=ndigits)
+
+        return _round(self)
+
+    def trunc(self) -> "Expr":
+        """Truncate values toward zero.
+
+        Returns:
+            UDFExpr that truncates values.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _trunc(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.trunc(arr)
+
+        return _trunc(self)
+
+    # Logarithmic methods
+    def ln(self) -> "Expr":
+        """Compute the natural logarithm.
+
+        Returns:
+            UDFExpr that computes natural log of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _ln(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.ln(arr)
+
+        return _ln(self)
+
+    def log10(self) -> "Expr":
+        """Compute the base-10 logarithm.
+
+        Returns:
+            UDFExpr that computes log10 of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _log10(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.log10(arr)
+
+        return _log10(self)
+
+    def log2(self) -> "Expr":
+        """Compute the base-2 logarithm.
+
+        Returns:
+            UDFExpr that computes log2 of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _log2(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.log2(arr)
+
+        return _log2(self)
+
+    def exp(self) -> "Expr":
+        """Compute the exponential (e^x).
+
+        Returns:
+            UDFExpr that computes e^x for each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _exp(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.exp(arr)
+
+        return _exp(self)
+
+    # Trigonometric methods
+    def sin(self) -> "Expr":
+        """Compute the sine.
+
+        Returns:
+            UDFExpr that computes sine of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _sin(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.sin(arr)
+
+        return _sin(self)
+
+    def cos(self) -> "Expr":
+        """Compute the cosine.
+
+        Returns:
+            UDFExpr that computes cosine of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _cos(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.cos(arr)
+
+        return _cos(self)
+
+    def tan(self) -> "Expr":
+        """Compute the tangent.
+
+        Returns:
+            UDFExpr that computes tangent of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _tan(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.tan(arr)
+
+        return _tan(self)
+
+    def asin(self) -> "Expr":
+        """Compute the arcsine.
+
+        Returns:
+            UDFExpr that computes arcsine of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _asin(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.asin(arr)
+
+        return _asin(self)
+
+    def acos(self) -> "Expr":
+        """Compute the arccosine.
+
+        Returns:
+            UDFExpr that computes arccosine of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _acos(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.acos(arr)
+
+        return _acos(self)
+
+    def atan(self) -> "Expr":
+        """Compute the arctangent.
+
+        Returns:
+            UDFExpr that computes arctangent of each value.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.float64())
+        def _atan(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.atan(arr)
+
+        return _atan(self)
+
+    # Null handling methods
+    def fill_null(self, fill_value: Any) -> "Expr":
+        """Replace null values with the given fill value.
+
+        Args:
+            fill_value: Value to use for null entries
+
+        Returns:
+            UDFExpr that fills null values.
+        """
+
+        @pyarrow_udf(return_dtype=self.data_type)
+        def _fill_null(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.fill_null(arr, fill_value)
+
+        return _fill_null(self)
+
+    def is_finite(self) -> "Expr":
+        """Check if values are finite (not NaN or infinity).
+
+        Returns:
+            UDFExpr that returns boolean indicating if values are finite.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.bool())
+        def _is_finite(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.is_finite(arr)
+
+        return _is_finite(self)
+
+    def is_inf(self) -> "Expr":
+        """Check if values are infinite.
+
+        Returns:
+            UDFExpr that returns boolean indicating if values are infinite.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.bool())
+        def _is_inf(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.is_inf(arr)
+
+        return _is_inf(self)
+
+    def is_nan(self) -> "Expr":
+        """Check if values are NaN.
+
+        Returns:
+            UDFExpr that returns boolean indicating if values are NaN.
+        """
+
+        @pyarrow_udf(return_dtype=DataType.bool())
+        def _is_nan(arr: pyarrow.Array) -> pyarrow.Array:
+            return pc.is_nan(arr)
+
+        return _is_nan(self)
+
+    # Type conversion
+    def cast(self, target_type: DataType) -> "Expr":
+        """Cast values to a different data type.
+
+        Args:
+            target_type: The target data type to cast to
+
+        Returns:
+            UDFExpr that casts values to the target type.
+        """
+
+        @pyarrow_udf(return_dtype=target_type)
+        def _cast(arr: pyarrow.Array) -> pyarrow.Array:
+            arrow_type = target_type.to_arrow_dtype()
+            return pc.cast(arr, arrow_type)
+
+        return _cast(self)
 
     def _unalias(self) -> "Expr":
         return self
@@ -1058,7 +1460,10 @@ __all__ = [
     "lit",
     "download",
     "star",
+    "_ArrayNamespace",
+    "_DatetimeNamespace",
     "_ListNamespace",
+    "_MapNamespace",
     "_StringNamespace",
     "_StructNamespace",
 ]
@@ -1066,10 +1471,24 @@ __all__ = [
 
 def __getattr__(name: str):
     """Lazy import of namespace classes to avoid circular imports."""
-    if name == "_ListNamespace":
+    if name == "_ArrayNamespace":
+        from ray.data.namespace_expressions.array_namespace import _ArrayNamespace
+
+        return _ArrayNamespace
+    elif name == "_DatetimeNamespace":
+        from ray.data.namespace_expressions.datetime_namespace import (
+            _DatetimeNamespace,
+        )
+
+        return _DatetimeNamespace
+    elif name == "_ListNamespace":
         from ray.data.namespace_expressions.list_namespace import _ListNamespace
 
         return _ListNamespace
+    elif name == "_MapNamespace":
+        from ray.data.namespace_expressions.map_namespace import _MapNamespace
+
+        return _MapNamespace
     elif name == "_StringNamespace":
         from ray.data.namespace_expressions.string_namespace import _StringNamespace
 
